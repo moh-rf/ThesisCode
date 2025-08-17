@@ -1,5 +1,4 @@
 
-
 ### LOAD LIBRARIES
 library(glmertree)
 library(dplyr)
@@ -176,21 +175,3 @@ cat("Plot similar to Figure 5 generated. Displaying now...\n")
 print(plot_figure_5_replication)
 
 ############################################################################
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
