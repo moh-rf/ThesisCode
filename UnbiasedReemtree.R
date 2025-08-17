@@ -38,7 +38,7 @@ REEMctree_function <- function (formula, data, random, subset = NULL, initialRan
       print(tree)
     newdata[, "nodeInd"] <- 0 
 
-    if(sum(subs) > 0 && !is.null(tree) && length(tree@tree$nodeID) > 0) { 
+    if(sum(subs) > 0 && !is.null(tree) && length(tree@tree$nodeID) > 0) {
       newdata[subs, "nodeInd"] <- party::where(tree) 
     } else if (sum(subs) > 0) { 
       newdata[subs, "nodeInd"] <- 1 
@@ -89,8 +89,9 @@ REEMctree_function <- function (formula, data, random, subset = NULL, initialRan
     
     AllEffects <- lmefit$residuals[, 1] - lmefit$residuals[, 
                                                            dim(lmefit$residuals)[2]]
-    
+
     if(length(AllEffects) != sum(subs)) {
+
       stop("Mismatch in length of AllEffects and subsetted data. Check lme fit and residuals structure.")
     }
     AdjustedTarget[subs] <- Target[subs] - AllEffects
@@ -142,8 +143,8 @@ data_filtered_tbl$Indices <- as.factor(data_filtered_tbl$Indices)
 data_filtered_df <- as.data.frame(data_filtered_tbl)
 
 
-fixed_effects_formula <- value ~ MeanRT + n_back
-data_filtered_df$Subject_Indices <- interaction(data_filtered_df$Subject, data_filtered_df$Indices, drop = TRUE)
+fixed_effects_formula <- value ~ MeanRT + n_back + Age + Accuracy + Session + Gender
+data_filtered_df$Subject_Indices <- interaction(data_filtered_df$Subject, data_filtered_df$Indices, drop = TRUE) 
 
 
 
@@ -155,7 +156,7 @@ reemctree_model_simple <- tryCatch({
     formula = fixed_effects_formula,
     data = data_filtered_df,
     random = ~1 | Subject,
-    ctree.control = party::ctree_control(mincriterion = 0.85) 
+    ctree.control = party::ctree_control(mincriterion = 0.85)
   )
 }, error = function(e) {
   print("Error running REEMctree (simple):")
@@ -171,7 +172,7 @@ if (!is.null(reemctree_model_simple) && !is.null(reemctree_model_simple$EffectMo
   actuals_ctree_simple <- data_filtered_df$value[reemctree_model_simple$Subset]
   predictions_ctree_simple <- actuals_ctree_simple - reemctree_model_simple$residuals[reemctree_model_simple$Subset]
   
-  
+
   residuals_from_model <- reemctree_model_simple$residuals[reemctree_model_simple$Subset] 
   
 
@@ -219,6 +220,7 @@ if (!is.null(reemctree_model_nested) && !is.null(reemctree_model_nested$EffectMo
   metrics_ctree_nested$RMSE <- sqrt(metrics_ctree_nested$MSE)
   metrics_ctree_nested$MAE <- mean(abs(residuals_from_model_nested), na.rm = TRUE)
   
+
   actuals_ctree_nested_plot <- data_filtered_df$value[reemctree_model_nested$Subset]
   predictions_ctree_nested_plot <- actuals_ctree_nested_plot - residuals_from_model_nested
   
@@ -283,7 +285,7 @@ cor_structures <- list(
   "NoCorrelation" = NULL,
   "AR1" = nlme::corAR1(form = ~1 | Subject), 
   "CAR1" = nlme::corCAR1(form = ~1 | Subject), 
-  "CompSymm" = nlme::corCompSymm(form = ~1 | Subject)
+  "CompSymm" = nlme::corCompSymm(form = ~1 | Subject) 
 )
 
 
@@ -329,7 +331,7 @@ cor_structures_nested <- list(
   "NoCorrelation" = NULL,
   "AR1" = nlme::corAR1(form = ~1 | Subject_Indices), 
   "CAR1" = nlme::corCAR1(form = ~1 | Subject_Indices), 
-  "CompSymm" = nlme::corCompSymm(form = ~1 | Subject_Indices) 
+  "CompSymm" = nlme::corCompSymm(form = ~1 | Subject_Indices)
 )
 
 
@@ -370,6 +372,7 @@ print(loglik_df_nested)
 ##########################################
 
 
+# Continuous AR(1)
 print("--- Starting REEMctree model: Without Nested - Continuous AR(1) ---")
 start_time_ctree_wn_car1 <- Sys.time()
 reemctree_model_wn_car1 <- tryCatch({
@@ -451,6 +454,7 @@ if(exists("metrics_ctree_simple") && !is.null(metrics_ctree_simple$RMSE) && !is.
   ))
 }
 
+
 if(!is.null(metrics_ctree_wn_car1$RMSE) && !is.na(metrics_ctree_wn_car1$RMSE)) {
   table6_your_results <- rbind(table6_your_results, data.frame(
     Method_Structure = "Unbiased RE-EM tree - Without nested structure",
@@ -472,7 +476,6 @@ if(exists("metrics_ctree_nested") && !is.null(metrics_ctree_nested$RMSE) && !is.
     System_Time_sec = as.numeric(system_time_ctree_nested, units = "secs")
   ))
 }
-
 
 if(!is.null(metrics_ctree_n_ar1$RMSE) && !is.na(metrics_ctree_n_ar1$RMSE)) {
   table6_your_results <- rbind(table6_your_results, data.frame(
@@ -498,4 +501,3 @@ if (nrow(table6_your_results) > 0) {
 } else {
   cat("\n\n--- No valid model results to populate the performance metrics table. ---\n")
 }
-
