@@ -1,4 +1,3 @@
-
 # Load necessary libraries
 library(readr)
 library(dplyr)
@@ -551,68 +550,88 @@ suppressWarnings({
 # ==========
 # Table 6 
 # ==========
-
-
-REEMctree_function <- function (formula, data, random, subset = NULL, initialRandomEffects = rep(0, nrow(data)), ErrorTolerance = 0.001, MaxIterations = 1000, 
-                                verbose = FALSE, lme.control = lmeControl(returnObject = TRUE), ctree.control = party::ctree_control(mincriterion = 0.85),
-                                method = "REML", correlation = NULL) 
-{
+# ------------------------- START OF NEW, CORRECTED FUNCTION ---------------------------------
+REEMctree_function_corrected <- function(formula, data, random, subset = NULL,
+                                         ErrorTolerance = 0.001, MaxIterations = 100,
+                                         lme.control = lmeControl(returnObject = TRUE, opt = "optim"),
+                                         ctree.control = party::ctree_control(mincriterion = 0.95),
+                                         verbose = FALSE) {
+  
+  # 1. Initialization
   if (is.null(subset)) {
-    subs <- rep(TRUE, nrow(data))
-  } else {
-    subs <- subset
+    subset <- rep(TRUE, nrow(data))
   }
+  data_subset <- data[subset, ]
   
   Predictors <- paste(attr(terms(formula), "term.labels"), collapse = "+")
   TargetName <- deparse(formula[[2]])
-  Target <- data[[TargetName]]
+  Target <- data_subset[[TargetName]]
   
-  ContinueCondition <- TRUE
+
+  group_name <- all.vars(random)[1] 
+  group_levels <- unique(data_subset[[group_name]])
+  
+
+  random_effects_est <- setNames(rep(0, length(group_levels)), group_levels)
+  
   iterations <- 0
-  AdjustedTarget <- Target - initialRandomEffects
+  ContinueCondition <- TRUE
   oldlik <- -Inf
   
-  newdata <- data
-  # *** FIX IS HERE: The column for subsetting MUST be created ***
-  newdata$SubsetVector <- subs
-  
+  # 2. EM Algorithm Loop
   while (ContinueCondition) {
-    newdata$AdjustedTarget <- AdjustedTarget
     iterations <- iterations + 1
     
-    tree <- party::ctree(formula(paste("AdjustedTarget ~", Predictors)), data = newdata, subset = subs, controls = ctree.control)
+    random_effects_vec <- random_effects_est[as.character(data_subset[[group_name]])]
+    data_subset$AdjustedTarget <- Target - random_effects_vec
     
-    newdata$nodeInd <- as.factor(1)
-    if(sum(subs) > 0 && length(tree@tree) > 0) {
-      newdata$nodeInd[subs] <- as.factor(party::where(tree))
-    }
+    # M-Step (Part 1): Fit a tree on the adjusted target
+    tree_formula <- as.formula(paste("AdjustedTarget ~", Predictors))
+    tree_fit <- tryCatch(
+      party::ctree(tree_formula, data = data_subset, controls = ctree.control),
+      error = function(e) NULL
+    )
     
-    if (length(unique(newdata$nodeInd[subs])) == 1) {
-      lmefit <- lme(formula(paste(TargetName, "~ 1")), data = newdata, random = random, 
-                    subset = SubsetVector, method = method, control = lme.control, 
-                    correlation = correlation)
+    if (is.null(tree_fit) || length(unique(party::where(tree_fit))) == 1) {
+      data_subset$nodeInd <- factor(1)
+      lme_formula <- as.formula(paste(TargetName, "~ 1"))
     } else {
-      lmefit <- lme(formula(paste(TargetName, "~ nodeInd")), data = newdata, 
-                    random = random, subset = SubsetVector, method = method, 
-                    control = lme.control, correlation = correlation)
+      data_subset$nodeInd <- factor(party::where(tree_fit))
+      lme_formula <- as.formula(paste(TargetName, "~ -1 + nodeInd")) 
     }
     
-    newlik <- logLik(lmefit)
+    # M-Step (Part 2): Fit LME to update random effects
+    lme_fit <- tryCatch(
+      nlme::lme(lme_formula, data = data_subset, random = random, control = lme.control),
+      error = function(e) {
+        if (verbose) cat("LME failed, falling back to simpler model.\n")
+        nlme::lme(as.formula(paste(TargetName, "~ 1")), data = data_subset, random = random, control = lme.control)
+      }
+    )
     
-    if (is.na(newlik) || !is.finite(newlik) || (newlik - oldlik < ErrorTolerance) || (iterations >= MaxIterations)) {
+    newlik <- as.numeric(logLik(lme_fit))
+    
+    random_effects_est <- setNames(ranef(lme_fit)[[1]], rownames(ranef(lme_fit)))
+
+    if (abs(newlik - oldlik) < ErrorTolerance || iterations >= MaxIterations || is.na(newlik)) {
       ContinueCondition <- FALSE
-    } else {
-      oldlik <- newlik
-      AllEffects <- fitted(lmefit, level = 0) - fitted(lmefit, level = length(lmefit$groups))
-      AdjustedTarget[subs] <- Target[subs] - AllEffects
     }
+    oldlik <- newlik
+    if (verbose) cat(sprintf("Iter: %d, LogLik: %.4f\n", iterations, newlik))
   }
   
-  residuals <- rep(NA, length(Target))
-  residuals[subs] <- Target[subs] - predict(lmefit)
+  # 3. Final results
+  final_predictions <- predict(lme_fit, level = 0) 
+  final_residuals <- Target - (final_predictions + ranef(lme_fit)[as.character(data_subset[[group_name]]), 1])
   
-  return(list(residuals = residuals))
+
+  full_residuals <- rep(NA, nrow(data))
+  full_residuals[subset] <- final_residuals
+  
+  return(list(residuals = full_residuals, model = lme_fit, tree = tree_fit))
 }
+# ------------------------- END OF NEW, CORRECTED FUNCTION ---------------------------------
+
 
 all_data <- read.csv("D:/payanname/Matlabcodes/HbO_Behavior_fnirs.csv")
 df_original <- all_data %>%
@@ -655,12 +674,18 @@ for (model_name in model_list) {
           n  <- lmertree(value ~ n_back + MeanRT | (1|Subject/Indices) | Age + Gender, data = df)
           return(list(nn = df$value - predict(nn), n = df$value - predict(n)))
         } else if (model_name == "REEMtree") {
-          nn <- REEMtree(value ~ MeanRT + n_back, data=df, random=~1|Subject)
-          n  <- REEMtree(value ~ MeanRT + n_back, data=df, random=~1|Subject_Indices)
+          full_formula <- value ~ MeanRT + n_back + Age + Accuracy + Session + Gender
+          nn <- REEMtree(full_formula, data=df, random=~1|Subject)
+          n  <- REEMtree(full_formula, data=df, random=~1|Subject_Indices)
           return(list(nn = nn$residuals, n = n$residuals))
+          
         } else if (model_name == "Unbiased REEMtree") {
-          nn <- REEMctree_function(value ~ MeanRT + n_back, data=df, random=~1|Subject)
-          n  <- REEMctree_function(value ~ MeanRT + n_back, data=df, random=~1|Subject_Indices)
+          full_formula <- value ~ MeanRT + n_back + Age + Accuracy + Session + Gender
+          
+          # فراخوانی تابع جدید
+          nn <- REEMctree_function_corrected(full_formula, data=df, random=~1|Subject)
+          n  <- REEMctree_function_corrected(full_formula, data=df, random=~1|Subject_Indices)
+          
           return(list(nn = nn$residuals, n = n$residuals))
         } else if (model_name == "GPBoost") {
           X <- model.matrix(value~Age+Accuracy+MeanRT+n_back+Session+Gender-1, df)
@@ -852,9 +877,3 @@ formatted_cv_table$RMSE <- formatC(cv_results_table$RMSE, format = "e", digits =
 formatted_cv_table$MSE <- formatC(cv_results_table$MSE, format = "e", digits = 1)
 formatted_cv_table$MAE <- formatC(cv_results_table$MAE, format = "e", digits = 1)
 print(formatted_cv_table, row.names = FALSE)
-
-
-
-
-
-
